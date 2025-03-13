@@ -1,0 +1,60 @@
+name: Determine and upload kernel related checksums
+env:
+  IMAGE: playtronos
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+on:
+  workflow_run:
+    workflows:
+      - "Build stable container image"
+      - "Build unstable container image"
+    types:
+      - completed
+
+jobs:
+  results-check:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - run: echo "The previous container build workflow failed"
+      - run: exit 1
+  kernel-checksums:
+    needs:
+      - results-check
+    if: always() && (needs.results-check.result == 'success' || needs.results-check.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Extract version
+        run: echo "TAG=$(echo $TAG | cut -d/ -f 2)" >> $GITHUB_ENV
+      - name: Create pre-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          release_name: ${{ env.TAG }}
+          draft: false
+          prerelease: true
+      - name: Find the initramfs checksum
+        run: podman run --rm ${IMAGE}:${TAG} sh -c "sha256sum /usr/lib/modules/\"\$(ls -lah /usr/lib/modules/ | tail -n 1 | awk '{print \$9}')\"/initramfs.img" >> /tmp/playtron-gameos-sha256sum.txt
+      - name: Find the vmlinuz (kernel) checksum
+        run: podman run --rm ${IMAGE}:${TAG} sh -c "sha256sum /usr/lib/modules/\"\$(ls -lah /usr/lib/modules/ | tail -n 1 | awk '{print \$9}')\"/vmlinuz" >> /tmp/playtron-gameos-sha256sum.txt
+      - name: Upload kernel checksums to pre-release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-prerelease.outputs.upload_url }}
+          asset_path: /tmp/playtron-gameos-sha256sum.txt
+          asset_name: playtron-gameos-sha256sum.txt
+          asset_content_type: text/plain
+      - name: Notify the backend about the new release
+        run: |
+          curl -X POST "${URL_ENDPOINT_HASHES}" \
+               -H "Content-Type: application/json" \
+               --data '{
+                   "release": "${TAG}",
+                 }
+               }'

@@ -1,4 +1,4 @@
-name: Build container image
+name: Build stable container image
 env:
   REGISTRY: ${{ secrets.REGISTRY }}
   REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
